@@ -1,0 +1,53 @@
+steps:
+  # Build the Docker image
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-t', 'gcr.io/$PROJECT_ID/luxelife-api', '.']
+
+  # Push the image to Container Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'gcr.io/$PROJECT_ID/luxelife-api']
+
+  # Deploy to Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: 'gcloud'
+    args:
+      - 'run'
+      - 'deploy'
+      - 'luxelife-api'
+      - '--image'
+      - 'gcr.io/$PROJECT_ID/luxelife-api'
+      - '--region'
+      - 'us-central1'
+      - '--platform'
+      - 'managed'
+      - '--allow-unauthenticated'
+      - '--memory'
+      - '1Gi'
+      - '--cpu'
+      - '1'
+      - '--timeout'
+      - '300'
+      - '--set-env-vars'
+      - 'DATABASE_URL=$_DATABASE_URL'
+      - '--set-env-vars'
+      - 'REDIS_URL=$_REDIS_URL'
+      - '--set-env-vars'
+      - 'JWT_ACCESS_SECRET=$_JWT_ACCESS_SECRET'
+      - '--set-env-vars'
+      - 'JWT_REFRESH_SECRET=$_JWT_REFRESH_SECRET'
+      - '--set-env-vars'
+      - 'ALLOWED_ORIGINS=$_ALLOWED_ORIGINS'
+      - '--set-env-vars'
+      - 'STATIC_BASE_URL=$_STATIC_BASE_URL'
+      - '--set-env-vars'
+      - 'GCS_BUCKET=$_GCS_BUCKET'
+      - '--set-env-vars'
+      - 'GCS_CREDENTIALS_JSON=$_GCS_CREDENTIALS_JSON'
+      - '--set-env-vars'
+      - 'SENTRY_DSN=$_SENTRY_DSN'
+
+substitutions:
+  _REGION: us-central1
+
+images:
+  - 'gcr.io/$PROJECT_ID/luxelife-api'
