@@ -47,7 +47,7 @@ class Settings(BaseSettings):
     GCS_CREDENTIALS_JSON: str = ""
 
     # ── Firebase ──
-    FIREBASE_CREDENTIALS_JSON: str = ""
+    FIREBASE_CREDENTIALS_JSON: str = ""  # Optional, use ADC in production
 
     # ── Twilio ──
     TWILIO_ACCOUNT_SID: str = ""

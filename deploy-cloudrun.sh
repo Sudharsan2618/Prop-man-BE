@@ -35,12 +35,10 @@ gcloud run deploy $SERVICE_NAME \
     --set-env-vars "ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-https://yourdomain.com}" \
     --set-env-vars "STATIC_BASE_URL=${STATIC_BASE_URL:-https://storage.googleapis.com/your-bucket}" \
     --set-env-vars "GCS_BUCKET=${GCS_BUCKET}" \
-    --set-env-vars "GCS_CREDENTIALS_JSON=${GCS_CREDENTIALS_JSON}" \
     --set-env-vars "SENTRY_DSN=${SENTRY_DSN}" \
     --set-env-vars "TWILIO_ACCOUNT_SID=${TWILIO_ACCOUNT_SID}" \
     --set-env-vars "TWILIO_AUTH_TOKEN=${TWILIO_AUTH_TOKEN}" \
-    --set-env-vars "TWILIO_PHONE_NUMBER=${TWILIO_PHONE_NUMBER}" \
-    --set-env-vars "FIREBASE_CREDENTIALS_JSON=${FIREBASE_CREDENTIALS_JSON}"
+    --set-env-vars "TWILIO_PHONE_NUMBER=${TWILIO_PHONE_NUMBER}"
 
 echo "Deployment complete!"
 echo "Service URL: $(gcloud run services describe $SERVICE_NAME --region $REGION --format='value(status.url)')"

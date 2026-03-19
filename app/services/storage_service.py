@@ -32,14 +32,17 @@ class StorageService:
     def _get_bucket(cls):
         """Lazy-initialize the GCS client and bucket."""
         if cls._bucket is None:
-            if not settings.GCS_CREDENTIALS_JSON:
-                logger.warning("GCS credentials not configured — using local storage")
-                return None
             try:
                 from google.cloud import storage
-                cls._client = storage.Client.from_service_account_json(
-                    settings.GCS_CREDENTIALS_JSON
-                )
+                # In Cloud Run, use Application Default Credentials
+                # In local dev, use service account JSON if provided
+                if settings.GCS_CREDENTIALS_JSON:
+                    cls._client = storage.Client.from_service_account_json(
+                        settings.GCS_CREDENTIALS_JSON
+                    )
+                else:
+                    # Use Application Default Credentials (Cloud Run)
+                    cls._client = storage.Client()
                 cls._bucket = cls._client.bucket(settings.GCS_BUCKET)
                 logger.info("GCS bucket connected", bucket=settings.GCS_BUCKET)
             except Exception as e:

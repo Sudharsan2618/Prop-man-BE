@@ -42,8 +42,6 @@ steps:
       - '--set-env-vars'
       - 'GCS_BUCKET=$_GCS_BUCKET'
       - '--set-env-vars'
-      - 'GCS_CREDENTIALS_JSON=$_GCS_CREDENTIALS_JSON'
-      - '--set-env-vars'
       - 'SENTRY_DSN=$_SENTRY_DSN'
 
 substitutions:

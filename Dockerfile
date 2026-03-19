@@ -31,11 +31,11 @@ USER app
 
 # Health check for Cloud Run
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import httpx; httpx.get('http://localhost:8000/health', timeout=5)" || exit 1
+    CMD python -c "import httpx; httpx.get('http://localhost:8080/health', timeout=5)" || exit 1
 
-# Expose port (Cloud Run expects port 8080 by default, but we'll use 8000 and map it)
-EXPOSE 8000
+# Expose port 8080 for Cloud Run
+EXPOSE 8080
 
 # Run the app with Gunicorn (production-ready)
-# Cloud Run automatically handles port mapping
-CMD ["gunicorn", "app.main:app", "-w", "4", "-k", "uvicorn.workers.UvicornWorker", "--bind", "0.0.0.0:8000", "--timeout", "120"]
+# Cloud Run expects port 8080 by default
+CMD ["gunicorn", "app.main:app", "-w", "4", "-k", "uvicorn.workers.UvicornWorker", "--bind", "0.0.0.0:8080", "--timeout", "120"]
