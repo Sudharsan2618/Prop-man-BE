@@ -109,6 +109,8 @@ class StorageService:
         bucket = cls._get_bucket()
 
         if bucket is None:
+            if not settings.DEBUG:
+                raise RuntimeError("Cloud storage is unavailable in production")
             # Local fallback for development
             local_dir = Path("uploads") / key.rsplit("/", 1)[0]
             local_dir.mkdir(parents=True, exist_ok=True)
@@ -131,6 +133,8 @@ class StorageService:
         """Delete a file from GCS by its URL."""
         bucket = cls._get_bucket()
         if bucket is None:
+            if not settings.DEBUG:
+                raise RuntimeError("Cloud storage is unavailable in production")
             # Local fallback
             local_path = Path("uploads") / url.split("/static/")[-1]
             if local_path.exists():

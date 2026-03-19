@@ -10,6 +10,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+import structlog
 
 from app.core.exceptions import UnauthorizedError
 from app.core.security import decode_access_token
@@ -19,6 +20,7 @@ from app.redis import redis_client
 
 # HTTP Bearer scheme — extracts token from "Authorization: Bearer <token>"
 bearer_scheme = HTTPBearer(auto_error=False)
+logger = structlog.get_logger()
 
 
 async def get_current_user(
@@ -56,9 +58,15 @@ async def get_current_user(
 
     # Check if token is blacklisted (user logged out)
     if jti:
-        is_blacklisted = await redis_client.get(f"blacklist:{jti}")
-        if is_blacklisted:
-            raise UnauthorizedError("Token has been revoked")
+        try:
+            is_blacklisted = await redis_client.get(f"blacklist:{jti}")
+            if is_blacklisted:
+                raise UnauthorizedError("Token has been revoked")
+        except UnauthorizedError:
+            raise
+        except Exception as e:
+            # Redis is optional in degraded mode; do not fail authenticated requests.
+            logger.warning("Redis blacklist check skipped", error=str(e))
 
     # Load user from DB
     result = await db.execute(select(User).where(User.id == user_id))

@@ -58,5 +58,4 @@ tests/
 docs/
 *.md
 
-# Alembic (keep versions but ignore env.py)
-alembic/env.py
+# Alembic

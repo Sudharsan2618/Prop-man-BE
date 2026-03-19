@@ -1,4 +1,5 @@
 #!/bin/bash
+set -euo pipefail
 
 # Cloud Run deployment script for LuxeLife API
 
@@ -22,11 +23,12 @@ gcloud run deploy $SERVICE_NAME \
     --image gcr.io/$PROJECT_ID/$SERVICE_NAME \
     --platform managed \
     --region $REGION \
+    --port 8080 \
     --allow-unauthenticated \
     --memory 1Gi \
     --cpu 1 \
     --timeout 300 \
-    --concurrency 1000 \
+    --concurrency 80 \
     --max-instances 100 \
     --set-env-vars "DATABASE_URL=${DATABASE_URL}" \
     --set-env-vars "REDIS_URL=${REDIS_URL}" \

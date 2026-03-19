@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     DEBUG: bool = False
     API_V1_PREFIX: str = "/api/v1"
     ALLOWED_ORIGINS: str = ""
-    STATIC_BASE_URL: str = "http://localhost:8000"
+    STATIC_BASE_URL: str = "http://localhost:8080"
     GZIP_MINIMUM_SIZE: int = 1024
 
     # ── Database ──
