@@ -10,7 +10,7 @@ from app.models.notification import Notification
 from app.models.onboarding_workflow import OnboardingWorkflowState, PropertyOnboardingWorkflow
 from app.models.payment import Payment, PaymentStatus, PaymentType
 from app.models.property import Property
-from app.models.user import User
+from app.models.user import Role, User
 from app.schemas.job import job_to_response
 from app.schemas.property import property_to_response
 from app.services.onboarding_workflow_service import OnboardingWorkflowService
@@ -21,6 +21,19 @@ class DashboardService:
 
     @staticmethod
     async def get_admin_dashboard(db: AsyncSession, *, admin_id: str) -> dict:
+        pending_statuses = [
+            PaymentStatus.PENDING,
+            PaymentStatus.OVERDUE,
+            PaymentStatus.AWAITING_VERIFICATION,
+        ]
+
+        # NOTE: AsyncSession is NOT safe for concurrent use — issuing multiple
+        # db.execute() calls in an asyncio.gather raises
+        # `_connection_for_bind() is already in progress`, which then masks the
+        # real error when the request unwinds and get_db tries to close the
+        # session. Sequential awaits use the same DB connection round-trip
+        # pattern as gather (one query at a time on a single connection),
+        # so latency is unchanged.
         user_count = (await db.execute(select(func.count(User.id)))).scalar() or 0
         property_count = (await db.execute(select(func.count(Property.id)))).scalar() or 0
         pending_actions_count = (
@@ -30,12 +43,6 @@ class DashboardService:
                 )
             )
         ).scalar() or 0
-
-        pending_statuses = [
-            PaymentStatus.PENDING,
-            PaymentStatus.OVERDUE,
-            PaymentStatus.AWAITING_VERIFICATION,
-        ]
         pending_invoice_count = (
             await db.execute(
                 select(func.count(Payment.id)).where(Payment.status.in_(pending_statuses))
@@ -43,23 +50,24 @@ class DashboardService:
         ).scalar() or 0
         pending_invoices_inr = (
             await db.execute(
-                select(func.coalesce(func.sum(Payment.amount), 0)).where(Payment.status.in_(pending_statuses))
+                select(func.coalesce(func.sum(Payment.amount), 0))
+                .where(Payment.status.in_(pending_statuses))
             )
         ).scalar() or 0
-
         settled_amount_inr = (
             await db.execute(
-                select(func.coalesce(func.sum(Payment.amount), 0)).where(Payment.status == PaymentStatus.PAID)
+                select(func.coalesce(func.sum(Payment.amount), 0))
+                .where(Payment.status == PaymentStatus.PAID)
             )
         ).scalar() or 0
-
-        notifications_query = (
-            select(Notification)
-            .where(Notification.user_id == admin_id)
-            .order_by(Notification.created_at.desc())
-            .limit(5)
-        )
-        notifications = (await db.execute(notifications_query)).scalars().all()
+        notifications = (
+            await db.execute(
+                select(Notification)
+                .where(Notification.user_id == admin_id)
+                .order_by(Notification.created_at.desc())
+                .limit(5)
+            )
+        ).scalars().all()
 
         # Keep financial amount scale compatible with existing UI rendering (/100 display).
         financials = {
@@ -96,26 +104,97 @@ class DashboardService:
         }
 
     @staticmethod
-    async def get_owner_dashboard(db: AsyncSession, *, owner_id: str) -> dict:
-        properties_query = (
-            select(Property)
-            .where(Property.owner_id == owner_id)
-            .order_by(Property.created_at.desc())
-        )
-        properties = (await db.execute(properties_query)).scalars().all()
+    async def get_super_admin_dashboard(db: AsyncSession, *, super_admin_id: str) -> dict:
+        """Super-admin dashboard with cross-role platform-level metrics."""
 
-        workflows = await OnboardingWorkflowService.list_workflows(db, owner_id=owner_id)
-
-        payment_rows = (
+        user_count = (
+            await db.execute(select(func.count(User.id)))
+        ).scalar() or 0
+        property_count = (
+            await db.execute(select(func.count(Property.id)))
+        ).scalar() or 0
+        manager_count = (
             await db.execute(
-                select(Payment.amount, Payment.created_at)
-                .where(
-                    Payment.owner_id == owner_id,
-                    Payment.status == PaymentStatus.PAID,
-                    Payment.type == PaymentType.RENT,
+                select(func.count(User.id)).where(User.active_role == Role.MANAGER)
+            )
+        ).scalar() or 0
+        service_provider_count = (
+            await db.execute(
+                select(func.count(User.id)).where(
+                    User.active_role == Role.SERVICE_PROVIDER
                 )
             )
-        ).all()
+        ).scalar() or 0
+        owner_count = (
+            await db.execute(
+                select(func.count(User.id)).where(User.active_role == Role.OWNER)
+            )
+        ).scalar() or 0
+        tenant_count = (
+            await db.execute(
+                select(func.count(User.id)).where(User.active_role == Role.TENANT)
+            )
+        ).scalar() or 0
+        pending_actions_count = (
+            await db.execute(
+                select(func.count(PropertyOnboardingWorkflow.id)).where(
+                    PropertyOnboardingWorkflow.state
+                    != OnboardingWorkflowState.TENANT_ACTIVATED
+                )
+            )
+        ).scalar() or 0
+        notifications = (
+            await db.execute(
+                select(Notification)
+                .where(Notification.user_id == super_admin_id)
+                .order_by(Notification.created_at.desc())
+                .limit(8)
+            )
+        ).scalars().all()
+
+        return {
+            "stats": {
+                "user_count": user_count,
+                "property_count": property_count,
+                "manager_count": manager_count,
+                "service_provider_count": service_provider_count,
+                "owner_count": owner_count,
+                "tenant_count": tenant_count,
+                "pending_actions_count": pending_actions_count,
+            },
+            "recent_activity": [
+                {
+                    "id": n.id,
+                    "icon": n.icon or "notifications",
+                    "iconBg": "rgba(19,200,236,0.15)" if n.type == "payment" else "rgba(212,168,67,0.15)",
+                    "iconColor": "#13C8EC" if n.type == "payment" else "#D4A843",
+                    "title": n.title or n.type or "Activity",
+                    "subtitle": n.body or "",
+                    "timestamp": _format_time_ago(n.created_at),
+                }
+                for n in notifications
+            ],
+            "quick_actions": [
+                {"key": "users", "label": "Users", "route": "/sa/users", "icon": "group"},
+                {"key": "properties", "label": "Properties", "route": "/sa/properties", "icon": "location_city"},
+                {"key": "permissions", "label": "Permissions", "route": "/sa/permissions", "icon": "admin_panel_settings"},
+            ],
+        }
+
+    @staticmethod
+    async def get_owner_dashboard(db: AsyncSession, *, owner_id: str) -> dict:
+        # Same single-session rule as get_admin_dashboard — sequential awaits,
+        # no asyncio.gather on a shared AsyncSession.
+        properties_query = select(Property).where(Property.owner_id == owner_id).order_by(Property.created_at.desc())
+        payment_query = select(Payment.amount, Payment.created_at).where(
+            Payment.owner_id == owner_id,
+            Payment.status == PaymentStatus.PAID,
+            Payment.type == PaymentType.RENT,
+        )
+
+        properties = (await db.execute(properties_query)).scalars().all()
+        workflows = await OnboardingWorkflowService.list_workflows(db, owner_id=owner_id)
+        payment_rows = (await db.execute(payment_query)).all()
 
         total_revenue = int(sum(row.amount or 0 for row in payment_rows))
         commission_rate = 10

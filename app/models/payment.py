@@ -25,8 +25,16 @@ from app.models import Base, TimestampMixin, generate_cuid
 
 
 def _enum_values(enum_cls: type[enum.Enum]) -> list[str]:
-    """Persist enum values (lowercase) instead of enum member names."""
-    return [item.value for item in enum_cls]
+    """
+    Persist enum MEMBER NAMES (UPPERCASE) as the Postgres-side string.
+
+    The DB v2.1 migration (DB/migrations/v2_0_to_v2_1.sql §2) recreated
+    `payment_status_enum`, `payment_type_enum`, and `agreement_status_enum`
+    with UPPER values for naming consistency. The Python `.value` of each
+    member stays lowercase — that's still what we serialize to the FE — but
+    SQLAlchemy now uses `.name` (UPPER) when talking to the database.
+    """
+    return [item.name for item in enum_cls]
 
 
 class PaymentType(str, enum.Enum):
@@ -34,6 +42,10 @@ class PaymentType(str, enum.Enum):
     SERVICE = "service"
     SECURITY_DEPOSIT = "security_deposit"
     ADVANCE = "advance"
+    # v2.1 additions — required to keep the Python enum in sync with the
+    # post-migration DB type `payment_type_enum`.
+    COMMISSION = "commission"   # platform commission deducted from rent
+    PAYOUT = "payout"           # owner / provider payout
 
 
 class PaymentStatus(str, enum.Enum):
@@ -45,6 +57,9 @@ class PaymentStatus(str, enum.Enum):
     ESCROWED = "escrowed"  # legacy compatibility
     FAILED = "failed"  # legacy compatibility
     REFUNDED = "refunded"
+    # v2.1 addition — explicit cancellation state for payments aborted before
+    # verification (previously expressed as REJECTED, conflating two concepts).
+    CANCELLED = "cancelled"
 
 
 class Payment(Base, TimestampMixin):

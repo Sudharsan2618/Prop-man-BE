@@ -18,15 +18,17 @@ from app.api.v1.notifications import router as notifications_router
 from app.api.v1.onboarding_workflows import router as onboarding_workflows_router
 from app.api.v1.payments import router as payments_router
 from app.api.v1.properties import router as properties_router
+from app.api.v1.rbac import router as rbac_router
 from app.api.v1.uploads import router as uploads_router
 from app.api.v1.users import router as users_router
-from app.api.v1.calendar import router as calendar_router
+from app.api.v1.visit_requests import router as visit_requests_router
 
 v1_router = APIRouter()
 v1_router.include_router(agreements_router)
 v1_router.include_router(auth_router)
 v1_router.include_router(users_router)
 v1_router.include_router(properties_router)
+v1_router.include_router(rbac_router)
 v1_router.include_router(payments_router)
 v1_router.include_router(jobs_router)
 v1_router.include_router(inspections_router)
@@ -36,5 +38,5 @@ v1_router.include_router(onboarding_workflows_router)
 v1_router.include_router(messaging_router)
 v1_router.include_router(disputes_router)
 v1_router.include_router(uploads_router)
-v1_router.include_router(calendar_router)
+v1_router.include_router(visit_requests_router)
 v1_router.include_router(dashboards_router)

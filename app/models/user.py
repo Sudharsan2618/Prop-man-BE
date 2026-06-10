@@ -9,11 +9,9 @@ import enum
 from datetime import datetime
 
 from sqlalchemy import (
-    ARRAY,
     Boolean,
     DateTime,
     Enum,
-    Float,
     ForeignKey,
     Integer,
     String,
@@ -25,24 +23,58 @@ from app.models import Base, TimestampMixin, generate_cuid
 
 class Role(str, enum.Enum):
     """User roles in the system."""
-    TENANT = "tenant"
-    OWNER = "owner"
-    PROVIDER = "provider"
-    ADMIN = "admin"
+    SUPER_ADMIN = "SUPER_ADMIN"
+    MANAGER = "MANAGER"
+    OWNER = "OWNER"
+    TENANT = "TENANT"
+    SERVICE_PROVIDER = "SERVICE_PROVIDER"
+
+    # Backward-compatible aliases for legacy code paths.
+    PROVIDER = "SERVICE_PROVIDER"
+    ADMIN = "MANAGER"
+
+    @classmethod
+    def from_api(cls, value: str) -> "Role":
+        normalized = value.strip().replace("-", "_").upper()
+        if normalized == "PROVIDER":
+            normalized = "SERVICE_PROVIDER"
+        if normalized == "ADMIN":
+            normalized = "MANAGER"
+        return cls(normalized)
+
+    @property
+    def api_value(self) -> str:
+        return self.value.lower()
 
 
 class UserStatus(str, enum.Enum):
     """KYC / account verification status."""
-    PENDING = "pending"
-    AWAITING_REVIEW = "awaiting_review"
-    VERIFIED = "verified"
-    SUSPENDED = "suspended"
+    PENDING = "PENDING"
+    AWAITING_REVIEW = "AWAITING_REVIEW"
+    VERIFIED = "VERIFIED"
+    SUSPENDED = "SUSPENDED"
+
+    @classmethod
+    def from_api(cls, value: str) -> "UserStatus":
+        return cls(value.strip().upper())
+
+    @property
+    def api_value(self) -> str:
+        return self.value.lower()
 
 
 class OnboardingStatus(str, enum.Enum):
     """Owner/NRI onboarding lifecycle status."""
-    CREATED = "created"
-    ENROLLED = "enrolled"
+    CREATED = "CREATED"
+    ENROLLED = "ENROLLED"
+
+    @classmethod
+    def from_api(cls, value: str) -> "OnboardingStatus":
+        return cls(value.strip().upper())
+
+    @property
+    def api_value(self) -> str:
+        return self.value.lower()
 
 
 class User(Base, TimestampMixin):
@@ -63,9 +95,6 @@ class User(Base, TimestampMixin):
     location: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     # ── Role & Status ──
-    roles: Mapped[list[str]] = mapped_column(
-        ARRAY(String), default=lambda: ["tenant"]
-    )
     active_role: Mapped[Role] = mapped_column(
         Enum(Role, name="role_enum", create_constraint=True),
         default=Role.TENANT,
@@ -84,24 +113,13 @@ class User(Base, TimestampMixin):
         index=True,
     )
     must_reset_password: Mapped[bool] = mapped_column(Boolean, default=False)
-    invited_by_admin_id: Mapped[str | None] = mapped_column(
+    invited_by: Mapped[str | None] = mapped_column(
+        "invited_by_admin_id",
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
     )
     invited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     enrolled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-
-    # ── Provider-specific ──
-    specialization: Mapped[str | None] = mapped_column(
-        String(255), nullable=True
-    )
-    rating: Mapped[float | None] = mapped_column(Float, nullable=True)
-    total_jobs: Mapped[int | None] = mapped_column(Integer, nullable=True)
-
-    # ── Owner-specific ──
-    portfolio_value: Mapped[str | None] = mapped_column(
-        String(50), nullable=True
-    )
 
     # ── Device & Auth ──
     fcm_token: Mapped[str | None] = mapped_column(String(512), nullable=True)

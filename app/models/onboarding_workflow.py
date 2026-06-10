@@ -10,23 +10,42 @@ from app.models import Base, TimestampMixin, generate_cuid
 
 
 class OnboardingWorkflowState(str, enum.Enum):
-    VISIT_BOOKED = "visit_booked"
-    VISIT_APPROVED = "visit_approved"
-    VISIT_REJECTED = "visit_rejected"
-    AGREEMENT_GENERATED = "agreement_generated"
-    TENANT_SIGNED = "tenant_signed"
-    ADVANCE_SUBMITTED = "advance_submitted"
-    ADVANCE_APPROVED = "advance_approved"
-    POLICE_VERIFICATION_COMPLETED = "police_verification_completed"
-    ORIGINAL_AGREEMENT_UPLOADED = "original_agreement_uploaded"
-    TENANT_ACTIVATED = "tenant_activated"
+    # NOTE: INTERESTED is a pre-VISIT_REQUESTED bookmark — set when a tenant
+    # marks a property as interested but hasn't yet asked for a visit. Present
+    # in DB enum `onboarding_workflow_state_enum`; must be kept in sync here
+    # or SQLAlchemy fails to deserialize existing rows.
+    INTERESTED = "INTERESTED"
+    VISIT_REQUESTED = "VISIT_REQUESTED"
+    VISIT_SCHEDULED = "VISIT_SCHEDULED"
+    VISIT_APPROVED = "VISIT_APPROVED"
+    VISIT_REJECTED = "VISIT_REJECTED"
+    AGREEMENT_GENERATED = "AGREEMENT_GENERATED"
+    TENANT_SIGNED = "TENANT_SIGNED"
+    ADVANCE_SUBMITTED = "ADVANCE_SUBMITTED"
+    ADVANCE_APPROVED = "ADVANCE_APPROVED"
+    POLICE_VERIFICATION_COMPLETED = "POLICE_VERIFICATION_COMPLETED"
+    ORIGINAL_AGREEMENT_UPLOADED = "ORIGINAL_AGREEMENT_UPLOADED"
+    TENANT_ACTIVATED = "TENANT_ACTIVATED"
+    CANCELLED = "CANCELLED"
+
+    @classmethod
+    def from_api(cls, value: str) -> "OnboardingWorkflowState":
+        return cls(value.strip().replace("-", "_").upper())
+
+    @property
+    def api_value(self) -> str:
+        return self.value.lower()
 
 
 class ChecklistApprovalStatus(str, enum.Enum):
-    NOT_SUBMITTED = "not_submitted"
-    SUBMITTED = "submitted"
-    APPROVED = "approved"
-    REJECTED = "rejected"
+    NOT_SUBMITTED = "NOT_SUBMITTED"
+    SUBMITTED = "SUBMITTED"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+
+    @property
+    def api_value(self) -> str:
+        return self.value.lower()
 
 
 class PropertyOnboardingWorkflow(Base, TimestampMixin):
@@ -45,17 +64,19 @@ class PropertyOnboardingWorkflow(Base, TimestampMixin):
     id: Mapped[str] = mapped_column(String(30), primary_key=True, default=generate_cuid)
     state: Mapped[OnboardingWorkflowState] = mapped_column(
         Enum(OnboardingWorkflowState, name="onboarding_workflow_state_enum", create_constraint=True),
-        default=OnboardingWorkflowState.VISIT_BOOKED,
+        default=OnboardingWorkflowState.VISIT_REQUESTED,
         index=True,
     )
 
     property_id: Mapped[str] = mapped_column(ForeignKey("properties.id", ondelete="CASCADE"), index=True)
     tenant_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     owner_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    manager_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     agreement_id: Mapped[str | None] = mapped_column(ForeignKey("agreements.id", ondelete="SET NULL"), nullable=True)
-    slot_id: Mapped[str | None] = mapped_column(ForeignKey("admin_slots.id", ondelete="SET NULL"), nullable=True)
+    visit_request_id: Mapped[str | None] = mapped_column(ForeignKey("visit_requests.id", ondelete="SET NULL"), nullable=True)
 
-    visit_booked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    visit_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    visit_scheduled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     visit_approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     visit_rejected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     agreement_generated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -90,3 +111,7 @@ class PropertyOnboardingWorkflow(Base, TimestampMixin):
 
     last_action_by: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     last_action_notes: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    cancelled_by: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    cancellation_reason: Mapped[str | None] = mapped_column(String(500), nullable=True)

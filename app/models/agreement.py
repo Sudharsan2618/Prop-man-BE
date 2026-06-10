@@ -31,6 +31,9 @@ class AgreementStatus(str, enum.Enum):
     ACTIVE = "active"
     TERMINATED = "terminated"
     EXPIRED = "expired"
+    # v2.1 addition — covers lease renewals that can't be modelled as
+    # active → terminated cleanly. The DB enum now includes this member.
+    RENEWAL_PENDING = "renewal_pending"
 
 
 class Agreement(Base, TimestampMixin):
@@ -44,12 +47,15 @@ class Agreement(Base, TimestampMixin):
     )
 
     # ── Status ──
+    # values_callable returns `.name` (UPPER) — the DB v2.1 migration
+    # recreated agreement_status_enum with UPPER values. `.value` (lowercase)
+    # is still what we serialize to the FE.
     status: Mapped[AgreementStatus] = mapped_column(
         Enum(
             AgreementStatus,
             name="agreement_status_enum",
             create_constraint=True,
-            values_callable=lambda e: [s.value for s in e],
+            values_callable=lambda e: [s.name for s in e],
         ),
         default=AgreementStatus.DRAFT,
         index=True,

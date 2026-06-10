@@ -20,6 +20,7 @@ from app.models.property import Occupancy, Property
 from app.models.user import Role, User
 from app.models.notification import Notification
 from app.models.payment import Payment, PaymentType, PaymentStatus
+from app.services.notification_service import NotificationService
 from app.services.onboarding_workflow_service import OnboardingWorkflowService
 
 logger = structlog.get_logger()
@@ -215,15 +216,17 @@ class AgreementService:
         )
         db.add(notif)
 
-        # Notify owner
-        notif_owner = Notification(
-            user_id=prop.owner_id,
+        # Fan out to owner + assigned managers
+        await NotificationService.notify_property_stakeholders(
+            db,
+            property_id=property_id,
             type="agreement_generated",
             title="New Rental Agreement",
             body=f"A rental agreement has been generated for {prop.name} with tenant {tenant.name}.",
-            data={"agreement_id": agreement.id},
+            actor_id=admin_id,
+            icon="description",
+            data={"agreement_id": agreement.id, "property_id": property_id},
         )
-        db.add(notif_owner)
 
         logger.info("Agreement auto-generated", agreement_id=agreement.id, property_id=property_id)
         await OnboardingWorkflowService.mark_agreement_generated(
@@ -288,19 +291,17 @@ class AgreementService:
                 actor_id=user_id,
             )
 
-            # Notify admin(s) about advance pending
-            admins = (await db.execute(
-                select(User).where(User.active_role == Role.ADMIN)
-            )).scalars().all()
-            for admin in admins:
-                notif = Notification(
-                    user_id=admin.id,
-                    type="advance_pending",
-                    title="Advance Payment Pending",
-                    body=f"Tenant signed agreement. Advance of Rs.{agreement.security_deposit:,} pending confirmation.",
-                    data={"agreement_id": agreement.id, "payment_id": advance.id},
-                )
-                db.add(notif)
+            # Notify owner + assigned managers (or super-admin fallback) about pending advance
+            await NotificationService.notify_property_stakeholders(
+                db,
+                property_id=agreement.property_id,
+                type="advance_pending",
+                title="Advance Payment Pending",
+                body=f"Tenant signed agreement. Advance of ₹{agreement.security_deposit:,} pending confirmation.",
+                actor_id=user_id,
+                icon="hourglass_top",
+                data={"agreement_id": agreement.id, "payment_id": advance.id},
+            )
 
         await db.flush()
         return success_response(data=_agreement_to_dict(agreement))
@@ -352,15 +353,17 @@ class AgreementService:
         )
         db.add(notif)
 
-        # Notify owner
-        notif_owner = Notification(
-            user_id=agreement.owner_id,
+        # Fan out to owner + assigned managers
+        await NotificationService.notify_property_stakeholders(
+            db,
+            property_id=agreement.property_id,
             type="new_tenant",
             title="New Tenant Confirmed",
             body="Advance payment confirmed. Agreement is now active.",
-            data={"agreement_id": agreement.id},
+            actor_id=admin_id,
+            icon="how_to_reg",
+            data={"agreement_id": agreement.id, "property_id": agreement.property_id},
         )
-        db.add(notif_owner)
 
         await db.flush()
         logger.info("Agreement activated", agreement_id=agreement_id, admin_id=admin_id)

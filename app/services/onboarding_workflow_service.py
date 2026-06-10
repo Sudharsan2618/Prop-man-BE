@@ -10,6 +10,8 @@ from app.models.onboarding_workflow import (
     OnboardingWorkflowState,
     PropertyOnboardingWorkflow,
 )
+from app.models.property import Property, PropertyManager, PropertyManagerRole
+from app.models.user import User
 
 
 class OnboardingWorkflowService:
@@ -26,11 +28,11 @@ class OnboardingWorkflowService:
         actor_id: str,
     ) -> PropertyOnboardingWorkflow:
         workflow = await _get_or_create_workflow(db, property_id=property_id, tenant_id=tenant_id, owner_id=owner_id)
-        workflow.slot_id = slot_id
-        workflow.state = OnboardingWorkflowState.VISIT_BOOKED
-        workflow.visit_booked_at = datetime.now(timezone.utc)
+        workflow.visit_request_id = slot_id
+        workflow.state = OnboardingWorkflowState.VISIT_REQUESTED
+        workflow.visit_requested_at = datetime.now(timezone.utc)
         workflow.last_action_by = actor_id
-        workflow.last_action_notes = "Visit booked"
+        workflow.last_action_notes = "Visit requested"
         await db.flush()
         return workflow
 
@@ -46,7 +48,7 @@ class OnboardingWorkflowService:
         approved: bool,
     ) -> PropertyOnboardingWorkflow:
         workflow = await _get_or_create_workflow(db, property_id=property_id, tenant_id=tenant_id, owner_id=owner_id)
-        workflow.slot_id = slot_id
+        workflow.visit_request_id = slot_id
         workflow.state = (
             OnboardingWorkflowState.VISIT_APPROVED
             if approved
@@ -159,7 +161,11 @@ class OnboardingWorkflowService:
         tenant_id: str | None = None,
         property_id: str | None = None,
         state: str | None = None,
+        restrict_to_property_ids: list[str] | None = None,
     ) -> list[dict]:
+        if restrict_to_property_ids is not None and len(restrict_to_property_ids) == 0:
+            return []
+
         query = select(PropertyOnboardingWorkflow)
         if owner_id:
             query = query.where(PropertyOnboardingWorkflow.owner_id == owner_id)
@@ -167,12 +173,52 @@ class OnboardingWorkflowService:
             query = query.where(PropertyOnboardingWorkflow.tenant_id == tenant_id)
         if property_id:
             query = query.where(PropertyOnboardingWorkflow.property_id == property_id)
+        if restrict_to_property_ids is not None:
+            query = query.where(PropertyOnboardingWorkflow.property_id.in_(restrict_to_property_ids))
         if state:
-            query = query.where(PropertyOnboardingWorkflow.state == OnboardingWorkflowState(state))
+            query = query.where(PropertyOnboardingWorkflow.state == OnboardingWorkflowState.from_api(state))
 
         query = query.order_by(PropertyOnboardingWorkflow.created_at.desc())
         result = await db.execute(query)
-        return [_to_dict(wf) for wf in result.scalars().all()]
+        workflows = result.scalars().all()
+        enrichment = await _build_enrichment(db, workflows)
+        return [_to_enriched_dict(wf, enrichment) for wf in workflows]
+
+    @staticmethod
+    async def cancel_workflow(
+        db: AsyncSession,
+        *,
+        workflow_id: str,
+        actor_id: str,
+        reason: str,
+    ) -> dict:
+        workflow = await _get_by_id(db, workflow_id)
+        if not workflow:
+            raise ValueError("Workflow not found")
+        if workflow.state == OnboardingWorkflowState.CANCELLED:
+            raise ValueError("Workflow is already cancelled")
+        if workflow.state == OnboardingWorkflowState.TENANT_ACTIVATED:
+            raise ValueError("Cannot cancel a completed onboarding")
+
+        workflow.state = OnboardingWorkflowState.CANCELLED
+        workflow.cancelled_at = datetime.now(timezone.utc)
+        workflow.cancelled_by = actor_id
+        workflow.cancellation_reason = reason
+        workflow.last_action_by = actor_id
+        workflow.last_action_notes = f"Onboarding cancelled: {reason}"
+        await db.flush()
+        await db.refresh(workflow)
+
+        enrichment = await _build_enrichment(db, [workflow])
+        return _to_enriched_dict(workflow, enrichment)
+
+    @staticmethod
+    async def get_workflow(db: AsyncSession, *, workflow_id: str) -> dict | None:
+        wf = await _get_by_id(db, workflow_id)
+        if not wf:
+            return None
+        enrichment = await _build_enrichment(db, [wf])
+        return _to_enriched_dict(wf, enrichment)
 
     @staticmethod
     async def submit_police_verification(
@@ -308,7 +354,7 @@ async def _get_or_create_workflow(
         property_id=property_id,
         tenant_id=tenant_id,
         owner_id=owner_id,
-        state=OnboardingWorkflowState.VISIT_BOOKED,
+        state=OnboardingWorkflowState.VISIT_REQUESTED,
     )
     db.add(workflow)
     await db.flush()
@@ -339,16 +385,84 @@ async def _get_by_id(db: AsyncSession, workflow_id: str) -> PropertyOnboardingWo
     return result.scalar_one_or_none()
 
 
+async def _build_enrichment(db: AsyncSession, workflows: list) -> dict:
+    """
+    Batch-load names/managers for a set of workflows.
+
+    Returns:
+        {
+            "properties":  {property_id: property_name},
+            "users":       {user_id: user_name},
+            "managers":    {property_id: {"id": manager_id, "name": manager_name}},
+        }
+    """
+    property_ids = {wf.property_id for wf in workflows if wf.property_id}
+    user_ids = set()
+    for wf in workflows:
+        if wf.tenant_id:
+            user_ids.add(wf.tenant_id)
+        if wf.owner_id:
+            user_ids.add(wf.owner_id)
+
+    properties: dict[str, str] = {}
+    if property_ids:
+        rows = (await db.execute(
+            select(Property.id, Property.name).where(Property.id.in_(property_ids))
+        )).all()
+        properties = {pid: name for pid, name in rows}
+
+    # Primary manager per property (fall back to any manager if no PRIMARY exists)
+    managers: dict[str, dict] = {}
+    if property_ids:
+        pm_rows = (await db.execute(
+            select(PropertyManager.property_id, PropertyManager.manager_id, PropertyManager.role)
+            .where(PropertyManager.property_id.in_(property_ids))
+            .order_by(PropertyManager.assigned_at.asc())
+        )).all()
+        for pid, mid, role in pm_rows:
+            existing = managers.get(pid)
+            if not existing or (existing.get("_role") != PropertyManagerRole.PRIMARY.value and role == PropertyManagerRole.PRIMARY):
+                managers[pid] = {"id": mid, "_role": role.value if hasattr(role, "value") else role}
+                user_ids.add(mid)
+
+    users: dict[str, str] = {}
+    if user_ids:
+        u_rows = (await db.execute(
+            select(User.id, User.name).where(User.id.in_(user_ids))
+        )).all()
+        users = {uid: name for uid, name in u_rows}
+
+    # Attach manager names + drop the helper _role key
+    for pid, m in managers.items():
+        m["name"] = users.get(m["id"])
+        m.pop("_role", None)
+
+    return {"properties": properties, "users": users, "managers": managers}
+
+
+def _to_enriched_dict(workflow: PropertyOnboardingWorkflow, enrichment: dict) -> dict:
+    base = _to_dict(workflow)
+    base["property_name"] = enrichment["properties"].get(workflow.property_id)
+    base["tenant_name"] = enrichment["users"].get(workflow.tenant_id)
+    base["owner_name"] = enrichment["users"].get(workflow.owner_id)
+    pm = enrichment["managers"].get(workflow.property_id) or {}
+    base["primary_manager_id"] = pm.get("id")
+    base["primary_manager_name"] = pm.get("name")
+    return base
+
+
 def _to_dict(workflow: PropertyOnboardingWorkflow) -> dict:
     return {
         "id": workflow.id,
-        "state": workflow.state.value,
+        "state": workflow.state.api_value,
         "property_id": workflow.property_id,
         "tenant_id": workflow.tenant_id,
         "owner_id": workflow.owner_id,
+        "manager_id": workflow.manager_id,
         "agreement_id": workflow.agreement_id,
-        "slot_id": workflow.slot_id,
-        "visit_booked_at": workflow.visit_booked_at.isoformat() if workflow.visit_booked_at else None,
+        "visit_request_id": workflow.visit_request_id,
+        "visit_requested_at": workflow.visit_requested_at.isoformat() if workflow.visit_requested_at else None,
+        "visit_scheduled_at": workflow.visit_scheduled_at.isoformat() if workflow.visit_scheduled_at else None,
         "visit_approved_at": workflow.visit_approved_at.isoformat() if workflow.visit_approved_at else None,
         "visit_rejected_at": workflow.visit_rejected_at.isoformat() if workflow.visit_rejected_at else None,
         "agreement_generated_at": workflow.agreement_generated_at.isoformat() if workflow.agreement_generated_at else None,
@@ -359,15 +473,18 @@ def _to_dict(workflow: PropertyOnboardingWorkflow) -> dict:
         "original_agreement_uploaded_at": workflow.original_agreement_uploaded_at.isoformat() if workflow.original_agreement_uploaded_at else None,
         "tenant_activated_at": workflow.tenant_activated_at.isoformat() if workflow.tenant_activated_at else None,
         "police_verification_doc_url": workflow.police_verification_doc_url,
-        "police_verification_status": workflow.police_verification_status.value,
+        "police_verification_status": workflow.police_verification_status.api_value,
         "police_verification_reviewed_by": workflow.police_verification_reviewed_by,
         "police_verification_rejection_reason": workflow.police_verification_rejection_reason,
         "original_agreement_doc_url": workflow.original_agreement_doc_url,
-        "original_agreement_status": workflow.original_agreement_status.value,
+        "original_agreement_status": workflow.original_agreement_status.api_value,
         "original_agreement_reviewed_by": workflow.original_agreement_reviewed_by,
         "original_agreement_rejection_reason": workflow.original_agreement_rejection_reason,
         "last_action_by": workflow.last_action_by,
         "last_action_notes": workflow.last_action_notes,
+        "cancelled_at": workflow.cancelled_at.isoformat() if workflow.cancelled_at else None,
+        "cancelled_by": workflow.cancelled_by,
+        "cancellation_reason": workflow.cancellation_reason,
         "created_at": workflow.created_at.isoformat() if workflow.created_at else None,
         "updated_at": workflow.updated_at.isoformat() if workflow.updated_at else None,
     }

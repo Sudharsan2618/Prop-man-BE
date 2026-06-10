@@ -17,6 +17,7 @@ from sqlalchemy.orm import selectinload
 from app.core.responses import paginated_response, success_response
 from app.models.payment import Payment, PaymentStatus, PaymentType
 from app.models.notification import Notification
+from app.services.notification_service import NotificationService
 
 logger = structlog.get_logger()
 
@@ -170,21 +171,19 @@ class PaymentService:
                 actor_id=tenant_id,
             )
 
-        # Notify admin(s)
-        from sqlalchemy import select as sel
-        from app.models.user import Role, User
-        admins = (await db.execute(
-            sel(User).where(User.active_role == Role.ADMIN)
-        )).scalars().all()
-        for admin in admins:
-            notif = Notification(
-                user_id=admin.id,
-                type="payment_receipt",
-                title="Payment Receipt Uploaded",
-                body=f"Tenant has uploaded a receipt for payment {payment.label} (₹{payment.amount:,})",
-                data={"payment_id": payment.id},
+        # Notify owner + assigned managers (or super-admin if no manager assigned)
+        if payment.property_id:
+            is_advance = payment.type in (PaymentType.ADVANCE, PaymentType.SECURITY_DEPOSIT)
+            await NotificationService.notify_property_stakeholders(
+                db,
+                property_id=payment.property_id,
+                type="advance_sent" if is_advance else "rent_sent",
+                title="Advance Receipt Uploaded" if is_advance else "Rent Receipt Uploaded",
+                body=f"Tenant uploaded a receipt for {payment.label} (₹{payment.amount:,}).",
+                actor_id=tenant_id,
+                icon="receipt",
+                data={"payment_id": payment.id, "amount": payment.amount},
             )
-            db.add(notif)
 
         logger.info("Receipt uploaded", payment_id=payment_id, tenant_id=tenant_id)
         return success_response(data=_payment_to_dict(payment))
@@ -221,15 +220,19 @@ class PaymentService:
             )
             db.add(notif)
 
-            # Notify owner
-            notif_owner = Notification(
-                user_id=payment.owner_id,
-                type="rent_received",
-                title="Rent Payment Received",
-                body=f"₹{payment.amount:,} for {payment.label} has been confirmed.",
-                data={"payment_id": payment.id},
-            )
-            db.add(notif_owner)
+            # Fan out to owner + assigned managers (excludes the admin who acted)
+            if payment.property_id:
+                is_advance = payment.type in (PaymentType.ADVANCE, PaymentType.SECURITY_DEPOSIT)
+                await NotificationService.notify_property_stakeholders(
+                    db,
+                    property_id=payment.property_id,
+                    type="advance_received" if is_advance else "rent_received",
+                    title="Advance Confirmed" if is_advance else "Rent Payment Received",
+                    body=f"₹{payment.amount:,} for {payment.label} has been confirmed.",
+                    actor_id=admin_id,
+                    icon="paid",
+                    data={"payment_id": payment.id, "amount": payment.amount},
+                )
 
             # If this is an advance/security deposit, also activate the agreement
             if payment.type in (PaymentType.ADVANCE, PaymentType.SECURITY_DEPOSIT):
@@ -311,15 +314,18 @@ class PaymentService:
         )
         db.add(notif)
 
-        # Notify owner
-        notif_owner = Notification(
-            user_id=agreement.owner_id,
-            type="new_tenant",
-            title="New Tenant Confirmed",
-            body="Advance payment confirmed. Agreement is now active.",
-            data={"agreement_id": agreement.id},
-        )
-        db.add(notif_owner)
+        # Fan out to owner + assigned managers
+        if agreement.property_id:
+            await NotificationService.notify_property_stakeholders(
+                db,
+                property_id=agreement.property_id,
+                type="new_tenant",
+                title="New Tenant Confirmed",
+                body="Advance payment confirmed. Agreement is now active.",
+                actor_id=admin_id,
+                icon="how_to_reg",
+                data={"agreement_id": agreement.id, "property_id": agreement.property_id},
+            )
 
         logger.info("Agreement activated via payment verification", agreement_id=agreement.id, payment_id=payment.id)
 
@@ -354,15 +360,19 @@ class PaymentService:
         )
         db.add(notif)
 
-        # Notify owner
-        notif_owner = Notification(
-            user_id=payment.owner_id,
-            type="payment_received",
-            title="Payment Received",
-            body=f"₹{payment.amount:,} for {payment.label} has been confirmed.",
-            data={"payment_id": payment.id},
-        )
-        db.add(notif_owner)
+        # Fan out to owner + assigned managers
+        if payment.property_id:
+            is_advance = payment.type in (PaymentType.ADVANCE, PaymentType.SECURITY_DEPOSIT)
+            await NotificationService.notify_property_stakeholders(
+                db,
+                property_id=payment.property_id,
+                type="advance_received" if is_advance else "payment_received",
+                title="Payment Received",
+                body=f"₹{payment.amount:,} for {payment.label} has been confirmed.",
+                actor_id=admin_id,
+                icon="paid",
+                data={"payment_id": payment.id, "amount": payment.amount},
+            )
 
         logger.info("Payment marked paid by admin", payment_id=payment_id, admin_id=admin_id)
         return success_response(data=_payment_to_dict(payment))

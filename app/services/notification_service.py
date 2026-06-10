@@ -9,19 +9,77 @@ from app.core.exceptions import NotFoundError
 from app.models import generate_cuid
 from app.models.notification import Notification
 from app.models.user import User
+from app.services.property_scope import get_property_stakeholders
 
 
 class NotificationService:
 
     @staticmethod
-    async def create(db: AsyncSession, *, user_id: str, type: str, title: str, body: str, icon: str | None = None, action_label: str | None = None, action_target: str | None = None) -> dict:
+    async def create(db: AsyncSession, *, user_id: str, type: str, title: str, body: str, icon: str | None = None, action_label: str | None = None, action_target: str | None = None, data: dict | None = None) -> dict:
         notif = Notification(
             id=generate_cuid(), user_id=user_id, type=type, title=title,
             body=body, icon=icon, action_label=action_label, action_target=action_target,
+            data=data,
         )
         db.add(notif)
         await db.flush()
         return _to_dict(notif)
+
+    @staticmethod
+    async def notify_property_stakeholders(
+        db: AsyncSession,
+        *,
+        property_id: str,
+        type: str,
+        title: str,
+        body: str,
+        actor_id: str | None = None,
+        include_owner: bool = True,
+        include_super_admin_fallback: bool = True,
+        icon: str | None = None,
+        action_label: str | None = None,
+        action_target: str | None = None,
+        data: dict | None = None,
+    ) -> int:
+        """
+        Fan out a property-scoped notification to:
+          - the property owner (unless `include_owner=False`)
+          - all assigned managers
+          - super-admins as a fallback when no managers are assigned
+
+        ``actor_id`` is excluded from the recipient set so the user who
+        triggered the event does not notify themselves. Returns the number
+        of notifications inserted. Caller is responsible for ``db.commit()``.
+        """
+        stakeholders = await get_property_stakeholders(
+            db,
+            property_id,
+            include_owner=include_owner,
+            include_super_admin_fallback=include_super_admin_fallback,
+        )
+
+        recipient_ids: set[str] = set()
+        if stakeholders["owner_id"]:
+            recipient_ids.add(stakeholders["owner_id"])
+        recipient_ids.update(stakeholders["manager_ids"])
+        recipient_ids.update(stakeholders["fallback_ids"])
+        if actor_id:
+            recipient_ids.discard(actor_id)
+
+        for user_id in recipient_ids:
+            db.add(Notification(
+                id=generate_cuid(),
+                user_id=user_id,
+                type=type,
+                title=title,
+                body=body,
+                icon=icon,
+                action_label=action_label,
+                action_target=action_target,
+                data=data,
+            ))
+        await db.flush()
+        return len(recipient_ids)
 
     @staticmethod
     async def list_notifications(db: AsyncSession, user_id: str, *, page: int = 1, limit: int = 20) -> tuple[list[dict], int]:

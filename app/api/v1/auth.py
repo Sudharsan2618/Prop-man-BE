@@ -15,12 +15,14 @@ from app.models.user import User
 from app.schemas.auth import (
     FirstLoginPasswordResetRequest,
     LoginRequest,
+    MyPermissionsResponse,
     RefreshTokenRequest,
     RegisterRequest,
     SendOTPRequest,
     VerifyOTPRequest,
 )
 from app.services.auth_service import AuthService
+from app.services.rbac_service import RBACService
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -117,3 +119,27 @@ async def logout(current_user: User = Depends(get_current_user),
     jti = payload.get("jti", "")
     result = await AuthService.logout(access_token_jti=jti)
     return success_response(result)
+
+
+@router.get("/me/permissions", response_model=None)
+async def get_my_permissions(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Return the set of permission codes the authenticated user holds.
+
+    Used by the frontend RbacContext on login to populate its
+    `<PermissionGate>` / `<RequirePermission>` decision set in a single
+    round-trip — no client-side joins.
+
+    Accessible to any authenticated user; each user reads their OWN codes.
+    """
+    codes = await RBACService.get_my_permission_codes(db, user_id=current_user.id)
+    return success_response(
+        MyPermissionsResponse(
+            user_id=current_user.id,
+            active_role=current_user.active_role.api_value,
+            codes=codes,
+        ).model_dump()
+    )

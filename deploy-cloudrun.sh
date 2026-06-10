@@ -28,8 +28,8 @@ gcloud run deploy $SERVICE_NAME \
     --memory 1Gi \
     --cpu 1 \
     --timeout 300 \
-    --concurrency 80 \
-    --max-instances 100 \
+    --concurrency 10 \
+    --max-instances 4 \
     --set-env-vars "DATABASE_URL=${DATABASE_URL}" \
     --set-env-vars "REDIS_URL=${REDIS_URL}" \
     --set-env-vars "JWT_ACCESS_SECRET=${JWT_ACCESS_SECRET}" \

@@ -8,7 +8,7 @@ from fastapi import Depends
 
 from app.dependencies import get_current_user
 from app.core.exceptions import ForbiddenError
-from app.models.user import User
+from app.models.user import Role, User
 
 
 def require_roles(*allowed_roles: str):
@@ -24,7 +24,19 @@ def require_roles(*allowed_roles: str):
     async def _check_role(
         current_user: User = Depends(get_current_user),
     ) -> User:
-        if current_user.active_role.value not in allowed_roles:
+        role_value = current_user.active_role.value
+
+        normalized_allowed = set()
+        for allowed in allowed_roles:
+            try:
+                normalized_allowed.add(Role.from_api(allowed).value)
+            except ValueError:
+                normalized_allowed.add(allowed)
+
+        if role_value == Role.SUPER_ADMIN.value:
+            return current_user
+
+        if role_value not in normalized_allowed:
             raise ForbiddenError(
                 f"This action requires one of: {', '.join(allowed_roles)}"
             )

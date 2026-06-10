@@ -15,34 +15,15 @@ router = APIRouter(tags=["Health"])
 
 
 @router.get("/health")
-async def health_check(db: AsyncSession = Depends(get_db)):
+async def health_check():
     """
-    Comprehensive health check — verifies DB and Redis connectivity.
-
-    Returns individual check status and overall health.
+    Lightweight health check for constant polling.
+    Does NOT hit the database or Redis to preserve Free Tier quotas.
     """
-    checks = {}
-
-    # Database
-    try:
-        await db.execute(text("SELECT 1"))
-        checks["database"] = "healthy"
-    except Exception as e:
-        checks["database"] = f"unhealthy: {e}"
-
-    # Redis
-    try:
-        await redis_client.ping()
-        checks["redis"] = "healthy"
-    except Exception as e:
-        checks["redis"] = f"unhealthy: {e}"
-
-    all_healthy = all(v == "healthy" for v in checks.values())
-
     return {
-        "status": "healthy" if all_healthy else "degraded",
-        "checks": checks,
+        "status": "healthy",
         "version": "1.0.0",
+        "note": "DB checks disabled for quota reasons",
     }
 
 

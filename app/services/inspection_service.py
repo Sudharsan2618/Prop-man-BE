@@ -76,7 +76,7 @@ class InspectionService:
     @staticmethod
     async def list_inspections(db: AsyncSession, user: User, *, page: int = 1, limit: int = 20, status: str | None = None, property_id: str | None = None) -> tuple[list[dict], int]:
         query = select(Inspection)
-        role = user.active_role.value
+        role = user.active_role.api_value
         if role == "tenant":
             query = query.where(Inspection.tenant_id == user.id)
 

@@ -27,7 +27,7 @@ class RegisterRequest(BaseModel):
     )
     role: str = Field(
         default="tenant",
-        pattern=r"^(tenant|owner|provider|admin)$",
+        pattern=r"^(tenant|owner|service_provider|provider|manager|admin|super_admin)$",
         description="Initial role",
     )
 
@@ -82,3 +82,19 @@ class AuthResponse(BaseModel):
     tokens: TokenResponse
     user: dict  # UserResponse (will be refined in user schemas)
     is_new: bool = False
+
+
+class MyPermissionsResponse(BaseModel):
+    """
+    Effective permission codes for the authenticated user.
+
+    Returned by `GET /auth/me/permissions`. Frontend (RbacContext) calls
+    this once on login to populate its `<PermissionGate>` / `<RequirePermission>`
+    decision set in a single round-trip.
+
+    Backed by the `user_permissions_view` SQL view created in
+    DB/migrations/v2_0_to_v2_1.sql §12.
+    """
+    user_id: str
+    active_role: str
+    codes: list[str]

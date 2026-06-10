@@ -14,10 +14,24 @@ router = APIRouter(prefix="/dashboard", tags=["Dashboards"])
 
 @router.get("/admin")
 async def get_admin_dashboard(
-    admin: User = Depends(require_roles("admin")),
+    admin: User = Depends(require_roles("manager")),
     db: AsyncSession = Depends(get_db),
 ):
+    # Path kept as `/admin` for FE back-compat; in v2 RBAC the role is MANAGER.
+    # SUPER_ADMIN is also allowed (require_roles passes them through globally).
     payload = await DashboardService.get_admin_dashboard(db, admin_id=admin.id)
+    return success_response(payload)
+
+
+@router.get("/super-admin")
+async def get_super_admin_dashboard(
+    super_admin: User = Depends(require_roles("super_admin")),
+    db: AsyncSession = Depends(get_db),
+):
+    payload = await DashboardService.get_super_admin_dashboard(
+        db,
+        super_admin_id=super_admin.id,
+    )
     return success_response(payload)
 
 

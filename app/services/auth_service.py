@@ -28,6 +28,7 @@ from app.core.security import (
     verify_password,
 )
 from app.models import generate_cuid
+from app.models.rbac import RBACRole, UserRole
 from app.models.user import OnboardingStatus, Role, User, UserStatus
 from app.redis import redis_client
 from app.schemas.user import user_to_response
@@ -80,12 +81,20 @@ class AuthService:
             phone=phone,
             password_hash=hash_password(password),
             initials=initials,
-            roles=[role],
-            active_role=Role(role),
-            status=UserStatus.PENDING if role == Role.PROVIDER.value else UserStatus.VERIFIED,
+            active_role=Role.from_api(role),
+            status=UserStatus.PENDING if Role.from_api(role) == Role.SERVICE_PROVIDER else UserStatus.VERIFIED,
         )
         db.add(user)
         await db.flush()  # get the ID without committing (commit in get_db)
+
+        role_row = (
+            await db.execute(select(RBACRole).where(RBACRole.name == user.active_role))
+        ).scalar_one_or_none()
+        if not role_row:
+            raise BadRequestError(f"Role not configured in RBAC table: {user.active_role.api_value}")
+
+        db.add(UserRole(user_id=user.id, role_id=role_row.id, assigned_by=None))
+        await db.flush()
 
         # Generate tokens
         tokens = _create_token_pair(user)
@@ -208,12 +217,18 @@ class AuthService:
                 phone=phone,
                 password_hash=hash_password(generate_otp(32)),  # random password
                 initials="LU",
-                roles=["tenant"],
                 active_role=Role.TENANT,
                 status=UserStatus.VERIFIED,
             )
             db.add(user)
             await db.flush()
+
+            tenant_role = (
+                await db.execute(select(RBACRole).where(RBACRole.name == Role.TENANT))
+            ).scalar_one_or_none()
+            if tenant_role:
+                db.add(UserRole(user_id=user.id, role_id=tenant_role.id, assigned_by=None))
+                await db.flush()
 
         # Update login timestamp
         user.last_login_at = datetime.now(timezone.utc)

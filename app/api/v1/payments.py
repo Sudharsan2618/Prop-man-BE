@@ -48,7 +48,7 @@ async def list_payments(
     db: AsyncSession = Depends(get_db),
 ):
     """List payments for the current user (tenant sees their payments, owner sees theirs)."""
-    role = user.active_role.value
+    role = user.active_role.api_value
     if role == "tenant":
         return await PaymentService.get_payments_by_tenant(
             db,
@@ -67,7 +67,7 @@ async def list_payments(
             status=status,
             payment_type=payment_type,
         )
-    elif role == "admin":
+    elif role in {"manager", "super_admin"}:
         return await PaymentService.get_pending_verifications(db, page, limit)
     else:
         raise HTTPException(403, "Invalid role")
@@ -81,7 +81,7 @@ async def pending_verifications(
     db: AsyncSession = Depends(get_db),
 ):
     """Admin views all payments awaiting receipt verification."""
-    if user.active_role.value != "admin":
+    if user.active_role.api_value not in {"manager", "super_admin"}:
         raise HTTPException(403, "Only admins can view pending verifications")
     return await PaymentService.get_pending_verifications(db, page, limit)
 
@@ -97,8 +97,8 @@ async def get_payment(
     if not payment:
         raise HTTPException(404, "Payment not found")
     # Check access
-    role = user.active_role.value
-    if role == "admin" or payment.tenant_id == user.id or payment.owner_id == user.id:
+    role = user.active_role.api_value
+    if role in {"manager", "super_admin"} or payment.tenant_id == user.id or payment.owner_id == user.id:
         from app.services.payment_service import _payment_to_dict
         return {"success": True, "data": _payment_to_dict(payment)}
     raise HTTPException(403, "Access denied")
@@ -133,7 +133,7 @@ async def verify_payment(
     db: AsyncSession = Depends(get_db),
 ):
     """Admin verifies (approves) or rejects a payment receipt."""
-    if user.active_role.value != "admin":
+    if user.active_role.api_value not in {"manager", "super_admin"}:
         raise HTTPException(403, "Only admins can verify payments")
     try:
         result = await PaymentService.admin_verify_payment(
@@ -155,7 +155,7 @@ async def mark_paid(
     db: AsyncSession = Depends(get_db),
 ):
     """Admin directly marks a payment as paid (for advance/deposit — no screenshot needed)."""
-    if user.active_role.value != "admin":
+    if user.active_role.api_value not in {"manager", "super_admin"}:
         raise HTTPException(403, "Only admins can mark payments as paid")
     try:
         result = await PaymentService.admin_mark_paid(
@@ -173,7 +173,7 @@ async def generate_rent(
     db: AsyncSession = Depends(get_db),
 ):
     """Admin triggers generation of monthly rent records for all active agreements."""
-    if user.active_role.value != "admin":
+    if user.active_role.api_value not in {"manager", "super_admin"}:
         raise HTTPException(403, "Only admins can trigger rent generation")
     
     count = await RentCycleService.generate_monthly_rent_records(db)

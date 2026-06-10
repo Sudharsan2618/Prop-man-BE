@@ -17,7 +17,7 @@ from app.models import Base
 
 # Import all models so they register with Base.metadata
 from app.models.user import User  # noqa: F401
-from app.models.property import Property  # noqa: F401
+from app.models.property import Property, PropertyManager, PropertyOccupancyHistory  # noqa: F401
 from app.models.payment import Payment  # noqa: F401
 from app.models.job import Job  # noqa: F401
 from app.models.inspection import Inspection  # noqa: F401
@@ -28,6 +28,7 @@ from app.models.agreement import Agreement  # noqa: F401
 from app.models.admin_slot import AdminSlot  # noqa: F401
 from app.models.admin_slot_block import AdminSlotBlock  # noqa: F401
 from app.models.onboarding_workflow import PropertyOnboardingWorkflow  # noqa: F401
+from app.models.rbac import RBACRole, Permission, RolePermission, UserRole  # noqa: F401
 
 # Alembic Config object
 config = context.config

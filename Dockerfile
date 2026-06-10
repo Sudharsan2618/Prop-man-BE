@@ -29,13 +29,14 @@ RUN useradd --create-home --shell /bin/bash app && \
     chown -R app:app /app
 USER app
 
-# Health check for Cloud Run
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import httpx; httpx.get('http://localhost:8080/health', timeout=5)" || exit 1
+# Health check (reduced frequency per quota optimization)
+HEALTHCHECK --interval=24h --timeout=5s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8080/health/ready || exit 1
 
 # Expose port 8080 for Cloud Run
 EXPOSE 8080
 
 # Run the app with Gunicorn (production-ready)
-# Cloud Run expects port 8080 by default
-CMD ["gunicorn", "app.main:app", "-w", "4", "-k", "uvicorn.workers.UvicornWorker", "--bind", "0.0.0.0:8080", "--timeout", "120"]
+# Limit to 1 worker because 1 worker = 3 DB connections (2 pool + 1 overflow)
+# With 4 Cloud Run instances this keeps connections ~12 max
+CMD ["gunicorn", "app.main:app", "-w", "1", "-k", "uvicorn.workers.UvicornWorker", "--bind", "0.0.0.0:8080", "--timeout", "120"]

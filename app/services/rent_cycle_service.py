@@ -13,6 +13,7 @@ from sqlalchemy.orm import selectinload
 from app.models.agreement import Agreement, AgreementStatus
 from app.models.payment import Payment, PaymentType, PaymentStatus
 from app.models.notification import Notification
+from app.services.notification_service import NotificationService
 
 logger = structlog.get_logger()
 
@@ -64,7 +65,7 @@ class RentCycleService:
                 )
                 db.add(rent_payment)
                 
-                # Notify tenant
+                # Notify tenant (rent-specific, not property fanout)
                 notif = Notification(
                     user_id=ag.tenant_id,
                     type="rent_due",
@@ -73,6 +74,18 @@ class RentCycleService:
                     data={"payment_id": rent_payment.id, "amount": ag.rent_amount}
                 )
                 db.add(notif)
+
+                # FYI to owner + assigned managers (the rent cycle started — they
+                # may want to follow up if it goes unpaid).
+                await NotificationService.notify_property_stakeholders(
+                    db,
+                    property_id=ag.property_id,
+                    type="rent_cycle_started",
+                    title=f"Rent Cycle: {month_label}",
+                    body=f"₹{ag.rent_amount:,} rent for {month_label} is now due from the tenant.",
+                    icon="event",
+                    data={"payment_id": rent_payment.id, "amount": ag.rent_amount},
+                )
                 created_count += 1
         
         await db.flush()

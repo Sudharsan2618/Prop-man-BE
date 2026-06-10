@@ -13,6 +13,7 @@ from app.models.job import Job, JobStatus
 from app.models.property import Property
 from app.models.user import User
 from app.schemas.job import job_to_response
+from app.services.notification_service import NotificationService
 
 
 SERVICE_CATEGORIES = [
@@ -43,15 +44,27 @@ class JobService:
             description=data["description"],
             icon=next((c["icon"] for c in SERVICE_CATEGORIES if c["id"] == data["category"]), "🔧"),
             address=prop.address,
-            tenant_name=user.name if user.active_role.value == "tenant" else None,
+            tenant_name=user.name if user.active_role.api_value == "tenant" else None,
             status=JobStatus.SCHEDULED,
             scheduled_date=data.get("scheduled_date"),
             scheduled_time=data.get("scheduled_time"),
             property_id=data["property_id"],
-            tenant_id=user.id if user.active_role.value == "tenant" else None,
+            tenant_id=user.id if user.active_role.api_value == "tenant" else None,
         )
         db.add(job)
         await db.flush()
+
+        await NotificationService.notify_property_stakeholders(
+            db,
+            property_id=prop.id,
+            type="repair_requested",
+            title="New Repair Request",
+            body=f"{user.name} raised a {data['category']} request for {prop.name}.",
+            actor_id=user.id,
+            icon="build",
+            data={"job_id": job.id, "property_id": prop.id},
+        )
+
         return job_to_response(job)
 
     @staticmethod
@@ -101,15 +114,30 @@ class JobService:
         job.status = JobStatus.COMPLETED
         job.completed_at = datetime.now(timezone.utc)
         await db.flush()
+
+        if job.property_id:
+            prop = await db.get(Property, job.property_id)
+            prop_name = prop.name if prop else "the property"
+            await NotificationService.notify_property_stakeholders(
+                db,
+                property_id=job.property_id,
+                type="invoice_raised",
+                title="Reimbursement Request",
+                body=f"Provider submitted an invoice of ₹{actual_cost:,} for {job.category} work at {prop_name}.",
+                actor_id=user.id,
+                icon="receipt_long",
+                data={"job_id": job.id, "property_id": job.property_id, "amount": actual_cost},
+            )
+
         return job_to_response(job)
 
     @staticmethod
     async def list_jobs(db: AsyncSession, user: User, *, page: int = 1, limit: int = 20, status: str | None = None, category: str | None = None, property_id: str | None = None, sort: str = "-created_at") -> tuple[list[dict], int]:
         query = select(Job)
-        role = user.active_role.value
+        role = user.active_role.api_value
         if role == "tenant":
             query = query.where(Job.tenant_id == user.id)
-        elif role == "provider":
+        elif role == "service_provider":
             query = query.where(Job.provider_id == user.id)
         if status:
             query = query.where(Job.status == JobStatus(status))

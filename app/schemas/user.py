@@ -25,18 +25,10 @@ class UserResponse(BaseModel):
     kyc_progress: int
     onboarding_status: str
     must_reset_password: bool
-    invited_by_admin_id: str | None = None
+    invited_by: str | None = None
     invited_at: datetime | None = None
     enrolled_at: datetime | None = None
     created_at: datetime
-
-    # Provider-specific
-    specialization: str | None = None
-    rating: float | None = None
-    total_jobs: int | None = None
-
-    # Owner-specific
-    portfolio_value: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -65,8 +57,33 @@ class SwitchRoleRequest(BaseModel):
 
     role: str = Field(
         ...,
-        pattern=r"^(tenant|owner|provider|admin)$",
+        pattern=r"^(tenant|owner|service_provider|provider|manager|admin|super_admin)$",
         description="Role to switch to (must be in user's roles list)",
+    )
+
+
+class AdminCreateUserRequest(BaseModel):
+    """Super admin payload to create a user with explicit role assignment."""
+
+    name: str = Field(..., min_length=2, max_length=100)
+    email: EmailStr
+    phone: str | None = Field(None, pattern=r"^\+\d{10,15}$")
+    password: str | None = Field(None, min_length=8, max_length=128)
+    active_role: str = Field(
+        default="tenant",
+        pattern=r"^(tenant|owner|service_provider|provider|manager|admin|super_admin)$",
+    )
+    roles: list[str] | None = Field(
+        default=None,
+        description="If omitted, [active_role] will be used",
+    )
+    status: str = Field(
+        default="verified",
+        pattern=r"^(pending|awaiting_review|verified|suspended)$",
+    )
+    property_ids: list[str] | None = Field(
+        default=None,
+        description="Property IDs to assign when creating a manager",
     )
 
 
@@ -95,18 +112,14 @@ def user_to_response(user) -> dict:
         initials=user.initials,
         avatar=user.avatar,
         location=user.location,
-        roles=user.roles or [],
-        active_role=user.active_role.value,
-        status=user.status.value,
+        roles=[user.active_role.api_value],
+        active_role=user.active_role.api_value,
+        status=user.status.api_value,
         kyc_progress=user.kyc_progress,
-        onboarding_status=user.onboarding_status.value,
+        onboarding_status=user.onboarding_status.api_value,
         must_reset_password=user.must_reset_password,
-        invited_by_admin_id=user.invited_by_admin_id,
+        invited_by=user.invited_by,
         invited_at=user.invited_at,
         enrolled_at=user.enrolled_at,
         created_at=user.created_at,
-        specialization=user.specialization,
-        rating=user.rating,
-        total_jobs=user.total_jobs,
-        portfolio_value=user.portfolio_value,
     ).model_dump()

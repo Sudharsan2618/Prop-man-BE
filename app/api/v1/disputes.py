@@ -52,7 +52,7 @@ async def list_disputes(
     user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db),
 ):
     query = select(Dispute)
-    if user.active_role.value != "admin":
+    if user.active_role.api_value not in {"manager", "super_admin"}:
         query = query.where(Dispute.raised_by == user.id)
     if status:
         query = query.where(Dispute.status == status)
