@@ -304,6 +304,12 @@ class PaymentService:
             actor_id=admin_id,
         )
 
+        # Generate & store the signed PDF — non-blocking on failure.
+        from app.services.agreement_pdf_service import AgreementPdfService
+        pdf_url = await AgreementPdfService.render_and_upload(agreement)
+        if pdf_url:
+            agreement.pdf_url = pdf_url
+
         # Notify tenant
         notif = Notification(
             user_id=agreement.tenant_id,

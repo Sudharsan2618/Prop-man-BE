@@ -46,3 +46,6 @@ sentry-sdk[fastapi]==2.19.2
 python-multipart==0.0.20
 cuid2==2.0.1
 python-dateutil==2.9.0
+
+# ── PDF (signed rental agreements) ──
+reportlab==4.2.5

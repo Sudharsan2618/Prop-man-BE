@@ -66,6 +66,9 @@ class VisitRequestService:
         if not prop:
             raise ValueError("Property not found")
 
+        tenant = await db.get(User, tenant_id)
+        tenant_name = tenant.name if tenant else "A tenant"
+
         # Block duplicate active requests for the same tenant+property.
         existing = (await db.execute(
             select(VisitRequest).where(
@@ -119,6 +122,18 @@ class VisitRequestService:
         visit.current_proposal_id = proposal.id
         await db.flush()
 
+        # Bootstrap the onboarding workflow row so the tracker shows step 1
+        # ("Visit Requested") immediately, with the correct actor + timestamp.
+        from app.services.onboarding_workflow_service import OnboardingWorkflowService
+        await OnboardingWorkflowService.mark_visit_booked(
+            db,
+            property_id=property_id,
+            tenant_id=tenant_id,
+            owner_id=prop.owner_id,
+            slot_id=visit.id,
+            actor_id=tenant_id,
+        )
+
         # Notify the counterparty (assigned manager or super-admin fallback)
         await _notify_counterparty(
             db,
@@ -126,7 +141,7 @@ class VisitRequestService:
             counterparty=counterparty,
             type="visit_requested",
             title="New Visit Request",
-            body=f"A tenant proposed a visit on {requested_date.isoformat()} "
+            body=f"{tenant_name} proposed a visit on {requested_date.isoformat()} "
                  f"{start_time.strftime('%H:%M')}–{end_time.strftime('%H:%M')} for {prop.name}.",
             actor_id=tenant_id,
             visit_id=visit.id,
@@ -243,6 +258,17 @@ class VisitRequestService:
         await db.flush()
 
         prop = await db.get(Property, visit.property_id)
+        if prop:
+            from app.services.onboarding_workflow_service import OnboardingWorkflowService
+            await OnboardingWorkflowService.mark_visit_scheduled(
+                db,
+                property_id=visit.property_id,
+                tenant_id=visit.tenant_id,
+                owner_id=prop.owner_id,
+                visit_request_id=visit.id,
+                actor_id=actor.id,
+            )
+
         await _notify_after_state_change(
             db,
             visit=visit,

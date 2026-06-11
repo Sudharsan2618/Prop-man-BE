@@ -37,6 +37,35 @@ class OnboardingWorkflowService:
         return workflow
 
     @staticmethod
+    async def mark_visit_scheduled(
+        db: AsyncSession,
+        *,
+        property_id: str,
+        tenant_id: str,
+        owner_id: str,
+        visit_request_id: str,
+        actor_id: str,
+    ) -> PropertyOnboardingWorkflow:
+        """Stamp visit_scheduled_at when both parties accept a proposal.
+
+        Idempotent: re-stamps timestamp on every accept (e.g. after a reschedule)
+        but only advances the workflow state if it is still in an early stage —
+        we never regress past VISIT_APPROVED / AGREEMENT_GENERATED.
+        """
+        workflow = await _get_or_create_workflow(db, property_id=property_id, tenant_id=tenant_id, owner_id=owner_id)
+        workflow.visit_request_id = visit_request_id
+        workflow.visit_scheduled_at = datetime.now(timezone.utc)
+        if workflow.state in (
+            OnboardingWorkflowState.INTERESTED,
+            OnboardingWorkflowState.VISIT_REQUESTED,
+        ):
+            workflow.state = OnboardingWorkflowState.VISIT_SCHEDULED
+        workflow.last_action_by = actor_id
+        workflow.last_action_notes = "Visit scheduled"
+        await db.flush()
+        return workflow
+
+    @staticmethod
     async def mark_visit_result(
         db: AsyncSession,
         *,
@@ -133,6 +162,10 @@ class OnboardingWorkflowService:
         workflow.advance_approved_at = datetime.now(timezone.utc)
         workflow.last_action_by = actor_id
         workflow.last_action_notes = "Advance approved"
+        # Whichever of {advance, police, original-agreement} is approved last
+        # is the one that completes the workflow. Without this call the row
+        # gets stuck at ADVANCE_APPROVED whenever advance happens last.
+        _try_activate_tenant(workflow)
         await db.flush()
         return workflow
 
@@ -348,6 +381,10 @@ async def _get_or_create_workflow(
     if existing:
         if not existing.owner_id:
             existing.owner_id = owner_id
+        # Backfill the step-1 timestamp on legacy rows that pre-date this guard,
+        # otherwise the tracker shows "Visit Requested" as pending forever.
+        if not existing.visit_requested_at:
+            existing.visit_requested_at = datetime.now(timezone.utc)
         return existing
 
     workflow = PropertyOnboardingWorkflow(
@@ -355,6 +392,7 @@ async def _get_or_create_workflow(
         tenant_id=tenant_id,
         owner_id=owner_id,
         state=OnboardingWorkflowState.VISIT_REQUESTED,
+        visit_requested_at=datetime.now(timezone.utc),
     )
     db.add(workflow)
     await db.flush()
@@ -387,13 +425,14 @@ async def _get_by_id(db: AsyncSession, workflow_id: str) -> PropertyOnboardingWo
 
 async def _build_enrichment(db: AsyncSession, workflows: list) -> dict:
     """
-    Batch-load names/managers for a set of workflows.
+    Batch-load names/managers/advance-payments for a set of workflows.
 
     Returns:
         {
-            "properties":  {property_id: property_name},
-            "users":       {user_id: user_name},
-            "managers":    {property_id: {"id": manager_id, "name": manager_name}},
+            "properties":         {property_id: property_name},
+            "users":              {user_id: user_name},
+            "managers":           {property_id: {"id": manager_id, "name": manager_name}},
+            "advance_payments":   {agreement_id: {id, status, screenshot_url, amount, label, rejection_reason}},
         }
     """
     property_ids = {wf.property_id for wf in workflows if wf.property_id}
@@ -437,7 +476,43 @@ async def _build_enrichment(db: AsyncSession, workflows: list) -> dict:
         m["name"] = users.get(m["id"])
         m.pop("_role", None)
 
-    return {"properties": properties, "users": users, "managers": managers}
+    # Resolve the advance/security-deposit payment linked to each workflow's
+    # agreement so the manager can review + approve it directly from the
+    # onboarding screen (instead of having to hop to ManagerPaymentReview).
+    advance_payments: dict[str, dict] = {}
+    agreement_ids = {wf.agreement_id for wf in workflows if wf.agreement_id}
+    if agreement_ids:
+        from app.models.agreement import Agreement
+        from app.models.payment import Payment
+
+        ag_rows = (await db.execute(
+            select(Agreement.id, Agreement.deposit_payment_id)
+            .where(Agreement.id.in_(agreement_ids))
+        )).all()
+        payment_to_agreement = {pid: aid for aid, pid in ag_rows if pid}
+
+        if payment_to_agreement:
+            pay_rows = (await db.execute(
+                select(Payment).where(Payment.id.in_(list(payment_to_agreement.keys())))
+            )).scalars().all()
+            for p in pay_rows:
+                aid = payment_to_agreement.get(p.id)
+                if aid:
+                    advance_payments[aid] = {
+                        "id": p.id,
+                        "status": p.status.value,
+                        "screenshot_url": p.screenshot_url,
+                        "amount": p.amount,
+                        "label": p.label,
+                        "rejection_reason": p.rejection_reason,
+                    }
+
+    return {
+        "properties": properties,
+        "users": users,
+        "managers": managers,
+        "advance_payments": advance_payments,
+    }
 
 
 def _to_enriched_dict(workflow: PropertyOnboardingWorkflow, enrichment: dict) -> dict:
@@ -448,6 +523,7 @@ def _to_enriched_dict(workflow: PropertyOnboardingWorkflow, enrichment: dict) ->
     pm = enrichment["managers"].get(workflow.property_id) or {}
     base["primary_manager_id"] = pm.get("id")
     base["primary_manager_name"] = pm.get("name")
+    base["advance_payment"] = enrichment.get("advance_payments", {}).get(workflow.agreement_id)
     return base
 
 

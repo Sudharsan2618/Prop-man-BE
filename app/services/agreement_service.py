@@ -272,9 +272,10 @@ class AgreementService:
             agreement.status = AgreementStatus.AWAITING_PAYMENT
 
             # Create advance payment record for admin to confirm
+            prop_name = agreement.property.name if agreement.property else "property"
             advance = Payment(
                 type=PaymentType.ADVANCE,
-                label=f"Security Deposit - {agreement.property_id}",
+                label=f"Security Deposit - {prop_name}",
                 amount=agreement.security_deposit,
                 property_id=agreement.property_id,
                 tenant_id=agreement.tenant_id,
@@ -342,6 +343,12 @@ class AgreementService:
             agreement_id=agreement.id,
             actor_id=admin_id,
         )
+
+        # Generate & store the signed PDF — non-blocking on failure.
+        from app.services.agreement_pdf_service import AgreementPdfService
+        pdf_url = await AgreementPdfService.render_and_upload(agreement)
+        if pdf_url:
+            agreement.pdf_url = pdf_url
 
         # Notify tenant
         notif = Notification(
